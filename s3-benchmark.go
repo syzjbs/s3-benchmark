@@ -12,11 +12,6 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/pivotal-golang/bytefmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -30,6 +25,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"code.cloudfoundry.org/bytefmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 // Global variables
@@ -113,19 +114,16 @@ func deleteAllObjects() {
 	client := getS3Client()
 	// Use multiple routines to do the actual delete
 	var doneDeletes sync.WaitGroup
-	// Loop deleting our versions reading as big a list as we can
-	var keyMarker, versionId *string
+	// Loop deleting reading as big a list as we can
+	var keyMarker *string
 	var err error
 	for loop := 1; ; loop++ {
 		// Delete all the existing objects and versions in the bucket
-		in := &s3.ListObjectVersionsInput{Bucket: aws.String(bucket), KeyMarker: keyMarker, VersionIdMarker: versionId, MaxKeys: aws.Int64(1000)}
-		if listVersions, listErr := client.ListObjectVersions(in); listErr == nil {
+		in := &s3.ListObjectsInput{Bucket: aws.String(bucket), Marker: keyMarker, MaxKeys: aws.Int64(1000)}
+		if listObjects, listErr := client.ListObjects(in); listErr == nil {
 			delete := &s3.Delete{Quiet: aws.Bool(true)}
-			for _, version := range listVersions.Versions {
-				delete.Objects = append(delete.Objects, &s3.ObjectIdentifier{Key: version.Key, VersionId: version.VersionId})
-			}
-			for _, marker := range listVersions.DeleteMarkers {
-				delete.Objects = append(delete.Objects, &s3.ObjectIdentifier{Key: marker.Key, VersionId: marker.VersionId})
+			for _, version := range listObjects.Contents {
+				delete.Objects = append(delete.Objects, &s3.ObjectIdentifier{Key: version.Key})
 			}
 			if len(delete.Objects) > 0 {
 				// Start a delete routine
@@ -139,11 +137,10 @@ func deleteAllObjects() {
 				go doDelete(bucket, delete)
 			}
 			// Advance to next versions
-			if listVersions.IsTruncated == nil || !*listVersions.IsTruncated {
+			if listObjects.IsTruncated == nil || !*listObjects.IsTruncated {
 				break
 			}
-			keyMarker = listVersions.NextKeyMarker
-			versionId = listVersions.NextVersionIdMarker
+			keyMarker = listObjects.NextMarker
 		} else {
 			// The bucket may not exist, just ignore in that case
 			if strings.HasPrefix(listErr.Error(), "NoSuchBucket") {
