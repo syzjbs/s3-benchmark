@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/md5"
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
@@ -39,7 +38,6 @@ var accessKey, secretKey, urlHost, bucket, region string
 var durationSecs, threads, loops int
 var objectSize uint64
 var objectData []byte
-var objectDataMd5 string
 var runningThreads, uploadCount, downloadCount, deleteCount, uploadSlowdownCount, downloadSlowdownCount, deleteSlowdownCount int32
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
 
@@ -214,7 +212,6 @@ func runUpload(threadNum int) {
 		prefix := fmt.Sprintf("%s/%s/Object-%d", urlHost, bucket, objnum)
 		req, _ := http.NewRequest("PUT", prefix, fileobj)
 		req.Header.Set("Content-Length", strconv.FormatUint(objectSize, 10))
-		req.Header.Set("Content-MD5", objectDataMd5)
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error uploading object %s: %v", prefix, err)
@@ -322,9 +319,6 @@ func main() {
 	// Initialize data for the bucket
 	objectData = make([]byte, objectSize)
 	rand.Read(objectData)
-	hasher := md5.New()
-	hasher.Write(objectData)
-	objectDataMd5 = base64.StdEncoding.EncodeToString(hasher.Sum(nil))
 
 	// Create the bucket and delete all the objects
 	createBucket(true)
