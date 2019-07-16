@@ -326,7 +326,6 @@ func main() {
 
 	// Loop running the tests
 	for loop := 1; loop <= loops; loop++ {
-
 		// reset counters
 		uploadCount = 0
 		uploadSlowdownCount = 0
