@@ -10,6 +10,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -39,19 +40,58 @@ var accessKey, secretKey, urlHost, bucket, region string
 var durationSecs, threads, loops int
 var objectSize uint64
 var objectData []byte
-var runningThreads, uploadCount, downloadCount, deleteCount, uploadSlowdownCount, downloadSlowdownCount, deleteSlowdownCount int32
+var runningThreads, uploadCount, downloadCount, deleteCount, uploadSlowdownCount, downloadSlowdownCount, deleteSlowdownCount int64
 var endtime, uploadFinish, downloadFinish, deleteFinish time.Time
+var jsonPrint bool
 
-func logit(msg string) {
+type logMessage struct {
+	LogTime       time.Time `json:"time"`
+	Method        string    `json:"method"`
+	Loop          int       `json:"loop"`
+	Time          float64   `json:"timeTaken"`
+	Objects       int64     `json:"totalObjects"`
+	Speed         string    `json:"avgSpeed"`
+	Operations    float64   `json:"totalOperations"`
+	SlowDownCount int64     `json:"slowDownCount"`
+}
+
+func (l logMessage) String() string {
+	if l.Speed != "" {
+		return fmt.Sprintf("%s Loop %d: %s time %.1f secs, objects = %d, speed = %sB/sec, %.1f operations/sec.",
+			l.LogTime.Format(http.TimeFormat), l.Loop, l.Method, l.Time, l.Objects, l.Speed, l.Operations)
+	}
+	return fmt.Sprintf("%s Loop %d: %s time %.1f secs, %.1f operations/sec.",
+		l.LogTime.Format(http.TimeFormat), l.Loop, l.Method, l.Time, l.Operations)
+}
+
+func (l logMessage) JSON() string {
+	data, err := json.Marshal(&l)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+var logfile *os.File
+
+func init() {
+	logfile, _ = os.OpenFile("benchmark.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+}
+
+func logit(l logMessage) {
+	var msg string
+	if jsonPrint {
+		msg = l.JSON()
+	} else {
+		msg = l.String()
+	}
 	fmt.Println(msg)
-	logfile, _ := os.OpenFile("benchmark.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 	if logfile != nil {
-		logfile.WriteString(time.Now().Format(http.TimeFormat) + ": " + msg + "\n")
-		logfile.Close()
+		logfile.WriteString(msg + "\n")
 	}
 }
 
-// Our HTTP transport used for the roundtripper below
+// HTTPTransport - Our HTTP transport used for the roundtripper below
 var HTTPTransport http.RoundTripper = &http.Transport{
 	Proxy: http.ProxyFromEnvironment,
 	Dial: (&net.Dialer{
@@ -106,7 +146,6 @@ func createBucket(ignore_errors bool) {
 			case "BucketAlreadyOwnedByYou":
 				fallthrough
 			case "BucketAlreadyExists":
-				log.Println("WARNING: Bucket already exists proceed")
 				return
 			}
 		}
@@ -133,7 +172,11 @@ func deleteAllObjects() {
 			if len(delete.Objects) > 0 {
 				// Start a delete routine
 				doDelete := func(bucket string, delete *s3.Delete) {
-					if _, e := client.DeleteObjects(&s3.DeleteObjectsInput{Bucket: aws.String(bucket), Delete: delete}); e != nil {
+					if _, e := client.DeleteObjects(
+						&s3.DeleteObjectsInput{
+							Bucket: aws.String(bucket),
+							Delete: delete,
+						}); e != nil {
 						err = fmt.Errorf("DeleteObjects unexpected failure: %s", e.Error())
 					}
 					doneDeletes.Done()
@@ -208,18 +251,18 @@ func setSignature(req *http.Request) {
 
 func runUpload(threadNum int) {
 	for time.Now().Before(endtime) {
-		objnum := atomic.AddInt32(&uploadCount, 1)
+		objnum := atomic.AddInt64(&uploadCount, 1)
 		fileobj := bytes.NewReader(objectData)
 		prefix := fmt.Sprintf("%s/%s/Object-%d", urlHost, bucket, objnum)
-		req, _ := http.NewRequest("PUT", prefix, fileobj)
+		req, _ := http.NewRequest(http.MethodPut, prefix, fileobj)
 		req.Header.Set("Content-Length", strconv.FormatUint(objectSize, 10))
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error uploading object %s: %v", prefix, err)
 		} else if resp != nil && resp.StatusCode != http.StatusOK {
 			if resp.StatusCode == http.StatusServiceUnavailable {
-				atomic.AddInt32(&uploadSlowdownCount, 1)
-				atomic.AddInt32(&uploadCount, -1)
+				atomic.AddInt64(&uploadSlowdownCount, 1)
+				atomic.AddInt64(&uploadCount, -1)
 			} else {
 				fmt.Printf("Upload status %s: resp: %+v\n", resp.Status, resp)
 				if resp.Body != nil {
@@ -232,22 +275,22 @@ func runUpload(threadNum int) {
 	// Remember last done time
 	uploadFinish = time.Now()
 	// One less thread
-	atomic.AddInt32(&runningThreads, -1)
+	atomic.AddInt64(&runningThreads, -1)
 }
 
 func runDownload(threadNum int) {
 	for time.Now().Before(endtime) {
-		atomic.AddInt32(&downloadCount, 1)
-		objnum := rand.Int31n(downloadCount) + 1
+		atomic.AddInt64(&downloadCount, 1)
+		objnum := rand.Int63n(downloadCount) + 1
 		prefix := fmt.Sprintf("%s/%s/Object-%d", urlHost, bucket, objnum)
-		req, _ := http.NewRequest("GET", prefix, nil)
+		req, _ := http.NewRequest(http.MethodGet, prefix, nil)
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error downloading object %s: %v", prefix, err)
 		} else if resp != nil && resp.Body != nil {
 			if resp.StatusCode == http.StatusServiceUnavailable {
-				atomic.AddInt32(&downloadSlowdownCount, 1)
-				atomic.AddInt32(&downloadCount, -1)
+				atomic.AddInt64(&downloadSlowdownCount, 1)
+				atomic.AddInt64(&downloadCount, -1)
 			} else {
 				io.Copy(ioutil.Discard, resp.Body)
 			}
@@ -256,37 +299,35 @@ func runDownload(threadNum int) {
 	// Remember last done time
 	downloadFinish = time.Now()
 	// One less thread
-	atomic.AddInt32(&runningThreads, -1)
+	atomic.AddInt64(&runningThreads, -1)
 }
 
 func runDelete(threadNum int) {
 	for {
-		objnum := atomic.AddInt32(&deleteCount, 1)
+		objnum := atomic.AddInt64(&deleteCount, 1)
 		if objnum > uploadCount {
 			break
 		}
 		prefix := fmt.Sprintf("%s/%s/Object-%d", urlHost, bucket, objnum)
-		req, _ := http.NewRequest("DELETE", prefix, nil)
+		req, _ := http.NewRequest(http.MethodDelete, prefix, nil)
 		setSignature(req)
 		if resp, err := httpClient.Do(req); err != nil {
 			log.Fatalf("FATAL: Error deleting object %s: %v", prefix, err)
 		} else if resp != nil && resp.StatusCode == http.StatusServiceUnavailable {
-			atomic.AddInt32(&deleteSlowdownCount, 1)
-			atomic.AddInt32(&deleteCount, -1)
+			atomic.AddInt64(&deleteSlowdownCount, 1)
+			atomic.AddInt64(&deleteCount, -1)
 		}
 	}
 	// Remember last done time
 	deleteFinish = time.Now()
 	// One less thread
-	atomic.AddInt32(&runningThreads, -1)
+	atomic.AddInt64(&runningThreads, -1)
 }
 
 func main() {
-	// Hello
-	fmt.Println("S3 benchmark program v2.0")
-
 	// Parse command line
 	myflag := flag.NewFlagSet("myflag", flag.ExitOnError)
+	myflag.BoolVar(&jsonPrint, "j", false, "Log output in JSON format")
 	myflag.StringVar(&accessKey, "a", "Q3AM3UQ867SPQQA43P2F", "Access key")
 	myflag.StringVar(&secretKey, "s", "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG", "Secret key")
 	myflag.StringVar(&urlHost, "u", "https://play.min.io", "URL for host with method prefix")
@@ -301,6 +342,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Hello
+	if !jsonPrint {
+		fmt.Println("S3 benchmark program v3.0")
+	}
+
 	// Check the arguments
 	if accessKey == "" {
 		log.Fatal("Missing argument -a for access key.")
@@ -313,9 +359,33 @@ func main() {
 		log.Fatalf("Invalid -z argument for object size: %v", err)
 	}
 
+	type parameters struct {
+		URLHost  string `json:"urlHost"`
+		Bucket   string `json:"bucket"`
+		Duration int    `json:"duration"`
+		Threads  int    `json:"threads"`
+		Loops    int    `json:"loops"`
+		Size     string `json:"sizeArg"`
+	}
+
 	// Echo the parameters
-	logit(fmt.Sprintf("Parameters: url=%s, bucket=%s, region=%s, duration=%d, threads=%d, loops=%d, size=%s",
-		urlHost, bucket, region, durationSecs, threads, loops, sizeArg))
+	if !jsonPrint {
+		fmt.Println(fmt.Sprintf("Parameters: url=%s, bucket=%s, duration=%d, threads=%d, loops=%d, size=%s",
+			urlHost, bucket, durationSecs, threads, loops, sizeArg))
+	} else {
+		data, err := json.Marshal(parameters{
+			URLHost:  urlHost,
+			Bucket:   bucket,
+			Duration: durationSecs,
+			Threads:  threads,
+			Loops:    loops,
+			Size:     sizeArg,
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(string(data))
+	}
 
 	// Initialize data for the bucket
 	objectData = make([]byte, objectSize)
@@ -336,7 +406,7 @@ func main() {
 		deleteSlowdownCount = 0
 
 		// Run the upload case
-		runningThreads = int32(threads)
+		runningThreads = int64(threads)
 		starttime := time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
 		for n := 1; n <= threads; n++ {
@@ -344,16 +414,25 @@ func main() {
 		}
 
 		// Wait for it to finish
-		for atomic.LoadInt32(&runningThreads) > 0 {
+		for atomic.LoadInt64(&runningThreads) > 0 {
 			time.Sleep(time.Millisecond)
 		}
 		uploadTime := uploadFinish.Sub(starttime).Seconds()
 
 		bps := float64(uint64(uploadCount)*objectSize) / uploadTime
-		logit(fmt.Sprintf("Loop %d: PUT time %.1f secs, objects = %d, speed = %sB/sec, %.1f operations/sec. Slowdowns = %d", loop, uploadTime, uploadCount, bytefmt.ByteSize(uint64(bps)), float64(uploadCount)/uploadTime, uploadSlowdownCount))
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodPut,
+			Time:          uploadTime,
+			Objects:       uploadCount,
+			Speed:         bytefmt.ByteSize(uint64(bps)),
+			Operations:    (float64(uploadCount) / uploadTime),
+			SlowDownCount: uploadSlowdownCount,
+		})
 
 		// Run the download case
-		runningThreads = int32(threads)
+		runningThreads = int64(threads)
 		starttime = time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
 		for n := 1; n <= threads; n++ {
@@ -361,16 +440,25 @@ func main() {
 		}
 
 		// Wait for it to finish
-		for atomic.LoadInt32(&runningThreads) > 0 {
+		for atomic.LoadInt64(&runningThreads) > 0 {
 			time.Sleep(time.Millisecond)
 		}
 		downloadTime := downloadFinish.Sub(starttime).Seconds()
 
 		bps = float64(uint64(downloadCount)*objectSize) / downloadTime
-		logit(fmt.Sprintf("Loop %d: GET time %.1f secs, objects = %d, speed = %sB/sec, %.1f operations/sec. Slowdowns = %d", loop, downloadTime, downloadCount, bytefmt.ByteSize(uint64(bps)), float64(downloadCount)/downloadTime, downloadSlowdownCount))
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodGet,
+			Time:          downloadTime,
+			Objects:       downloadCount,
+			Speed:         bytefmt.ByteSize(uint64(bps)),
+			Operations:    (float64(downloadCount) / downloadTime),
+			SlowDownCount: downloadSlowdownCount,
+		})
 
 		// Run the delete case
-		runningThreads = int32(threads)
+		runningThreads = int64(threads)
 		starttime = time.Now()
 		endtime = starttime.Add(time.Second * time.Duration(durationSecs))
 		for n := 1; n <= threads; n++ {
@@ -378,14 +466,24 @@ func main() {
 		}
 
 		// Wait for it to finish
-		for atomic.LoadInt32(&runningThreads) > 0 {
+		for atomic.LoadInt64(&runningThreads) > 0 {
 			time.Sleep(time.Millisecond)
 		}
 		deleteTime := deleteFinish.Sub(starttime).Seconds()
 
-		logit(fmt.Sprintf("Loop %d: DELETE time %.1f secs, %.1f deletes/sec. Slowdowns = %d",
-			loop, deleteTime, float64(uploadCount)/deleteTime, deleteSlowdownCount))
+		logit(logMessage{
+			LogTime:       time.Now(),
+			Loop:          loop,
+			Method:        http.MethodDelete,
+			Time:          deleteTime,
+			Operations:    (float64(uploadCount) / deleteTime),
+			SlowDownCount: deleteSlowdownCount,
+		})
 	}
 
 	// All done
+	if !jsonPrint {
+		fmt.Println("Benchmark completed.")
+	}
+	logfile.Close()
 }
