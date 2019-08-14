@@ -1,4 +1,4 @@
-module github.com/harshavardhana/s3-benchmark
+module github.com/minio/s3-benchmark
 
 go 1.12
 
