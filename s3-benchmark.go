@@ -237,7 +237,7 @@ func hmacSHA1(key []byte, content string) []byte {
 
 func setSignature(req *http.Request) {
 	// Setup default parameters
-	dateHdr := time.Now().UTC().Format("20060102T150405Z")
+	dateHdr := time.Now().UTC().Format(time.RFC1123)
 	req.Header.Set("X-Amz-Date", dateHdr)
 	// Get the canonical resource and header
 	canonicalResource := req.URL.EscapedPath()
