@@ -6,8 +6,8 @@ This project is a fork of upstream https://github.com/wasabi-tech/s3-benchmark, 
 
 Two main changes which diverge from https://github.com/wasabi-tech/s3-benchmark are as shown below
 
-- Deprecate ListObjectVersions usage
 - Deprecate calculating `Content-Md5` to speed up numbers on NVMe/flash based storage
+- JSON formated output
 
 # Prerequisites
 To leverage this tool, the following prerequisites apply:
