@@ -8,12 +8,13 @@ Two main changes which diverge from https://github.com/wasabi-tech/s3-benchmark 
 
 - Deprecate calculating `Content-Md5` to speed up numbers on NVMe/flash based storage
 - JSON formated output
+- Rawspeed output support
 
 # Prerequisites
 To leverage this tool, the following prerequisites apply:
 * Git development environment
 * Ubuntu Linux shell programming skills
-* Access to a Go 1.7 development system (only if the OS is not Ubuntu Linux 16.04)
+* Access to a Go 1.13 development system (only if the OS is not Ubuntu Linux 16.04)
 * Access to the appropriate object storage servers to test.
 
 # Building the Program
@@ -34,7 +35,7 @@ executable `s3-benchmark` will run the benchmark testing without having to build
 
 Otherwise, to build the s3-benchmark executable, you must issue this following command:
 ```
-CGO_ENABLED=0 go build s3-bechmark.go
+CGO_ENABLED=0 go build --ldflags "-s -w"
 ```
 
 # Command Line Arguments
