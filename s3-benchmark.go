@@ -428,8 +428,8 @@ func main() {
 			Time:          uploadTime,
 			Objects:       uploadCount,
 			Speed:         bytefmt.ByteSize(uint64(bps)),
-			Operations:    (float64(uploadCount) / uploadTime),
 			RawSpeed:      uint64(bps),
+			Operations:    (float64(uploadCount) / uploadTime),
 			SlowDownCount: uploadSlowdownCount,
 		})
 
