@@ -1,3 +1,5 @@
+> NOTE: Deprecated use https://github.com/minio/warp instead
+
 # Introduction
 s3-benchmark is a performance testing tool provided by Wasabi for capturing performance of S3 operations (PUT, GET, and DELETE) for objects. Besides the bucket configuration, the object size and number of threads can be varied for different tests.
 
